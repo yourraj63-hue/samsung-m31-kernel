@@ -1,29 +1,86 @@
-name: Android kernel build test
+name: Build Shitanshu Custom Kernel for M31
+
 on:
-  push:
-    branches:
-      - master
+  workflow_dispatch: # गिटहब पर "Run workflow" बटन दबाकर मैन्युअल स्टार्ट करने के लिए
 
 jobs:
-  TestBuild:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - name: ↗️ Checkout
-        uses: actions/checkout@v2
-      - name: ⚙️ setup dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bc bison build-essential binutils-aarch64-linux-gnu ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick libncurses5 lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libwxgtk3.0-gtk3-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc yasm zip zlib1g-dev
-      - name: 🔨 Setup toolchain
-        run: |
-          mkdir -p ~/toolchain
-          bash resolv_toolchain_linux.sh
-      - name: 🏗️ Build Kernel
-        run: |
-          ./cleanup
-          sudo bash build.sh
-      - name: 📦 Upload artifacts
-        uses: actions/upload-artifact@v2
-        with:
-          name: kernel
-          path: SM-M315f_kernel.zip
+    - name: Checkout Kernel Source
+      uses: actions/checkout@v4
+
+    - name: Install Build Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf lib32readline-dev lib32z1-dev libelf-dev liblz4-tool libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3
+
+    - name: Download Proton Clang Toolchain
+      run: |
+        mkdir -p $GITHUB_WORKSPACE/tc
+        cd $GITHUB_WORKSPACE/tc
+        # Exynos 9611 के लिए बेस्ट स्टेबिलिटी के लिए AOSP/Proton Clang डाउनलोड हो रहा है
+        curl -LO https://googlesource.com
+        tar -xf clang-r522817.tar.gz
+        rm clang-r522817.tar.gz
+
+    - name: Set Environment Variables
+      run: |
+        echo "ARCH=arm64" >> $GITHUB_ENV
+        echo "SUBARCH=arm64" >> $GITHUB_ENV
+        echo "PATH=$GITHUB_WORKSPACE/tc/bin:$PATH" >> $GITHUB_ENV
+        # कर्नल बिल्डर इन्फो में आपका नाम सेट करना
+        echo "KBUILD_BUILD_USER=Shitanshu" >> $GITHUB_ENV
+        echo "KBUILD_BUILD_HOST=Custom-Kernel" >> $GITHUB_ENV
+
+    - name: Inject Custom Name into Defconfig
+      run: |
+        # यहाँ 'm31_00_defconfig' की जगह अपने कर्नल सोर्स के defconfig का सही नाम लिखें (जैसे m31_global_defconfig)
+        DEFCONFIG="m31_00_defconfig"
+        echo "CONFIG_LOCALVERSION=\"-Shitanshu\"" >> arch/arm64/configs/$DEFCONFIG
+        echo "TARGET_DEFCONFIG=$DEFCONFIG" >> $GITHUB_ENV
+
+    - name: Build Kernel
+      run: |
+        make O=out ARCH=arm64 $TARGET_DEFCONFIG
+        
+        make -j$(nproc --all) O=out \
+            ARCH=arm64 \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            KBUILD_BUILD_USER="$KBUILD_BUILD_USER" \
+            KBUILD_BUILD_HOST="$KBUILD_BUILD_HOST"
+
+    - name: Check Kernel Output
+      run: |
+        if [ -f out/arch/arm64/boot/Image.gz-dtb ]; then
+            echo "Kernel compilation successful!"
+        else
+            echo "Kernel compilation failed! Image.gz-dtb not found."
+            exit 1
+        fi
+
+    - name: Pack with AnyKernel3 (Flashable ZIP)
+      run: |
+        cd $GITHUB_WORKSPACE
+        # AnyKernel3 क्लोन करना जो ज़िप बनाने में मदद करता है
+        git clone https://github.com AnyKernel
+        cd AnyKernel
+        
+        # AnyKernel3 को M31 (Exynos 9611) के ब्लॉक पाथ के लिए कॉन्फ़िगर करना
+        sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
+        sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;|block=/dev/block/by-name/boot;|g' anykernel.sh
+        
+        # बनी हुई कर्नल इमेज को एनीकर्नल फ़ोल्डर में कॉपी करना
+        cp $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz-dtb .
+        
+        # फ़्लैश होने वाली ZIP फ़ाइल तैयार करना
+        zip -r9 $GITHUB_WORKSPACE/Shitanshu-Kernel-M31.zip * -x .git README.md
+
+    - name: Upload Flashable Kernel ZIP
+      uses: actions/upload-artifact@v4
+      with:
+        name: Shitanshu-Kernel-M31
+        path: ${{ github.workspace }}/Shitanshu-Kernel-M31.zip
