@@ -1,27 +1,48 @@
-name: 100% Fixed Ultra-Automatic Shitanshu Kernel for M31
+name: 100% Fixed Official Environment Shitanshu Kernel for M31
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    # सुरक्षित और पुराने स्थिर बिल्ड एनवायरनमेंट के लिए डॉकर कंटेनर का उपयोग
-    container:
-      image: ghcr.io/sushrut111/ubuntu:20.04
-      
+    # बाहरी कंटेनर हटाकर सीधे गिटहब के ऑफिशियल उबंटू 20.04 एनवायरनमेंट का उपयोग
+    runs-on: ubuntu-20.04
     steps:
     - name: Checkout Kernel Source
       uses: actions/checkout@v4
 
-    - name: Pre-Setup Dependencies
+    - name: Install Build Dependencies
       run: |
-        apt-get update && apt-get install -y wget zip unzip libssl-dev bc bison flex make gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+        sudo apt-get update
+        sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf lib32readline-dev lib32z1-dev libelf-dev liblz4-tool libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3 wget
+
+    - name: Setup Android GCC Toolchains
+      run: |
+        mkdir -p $GITHUB_WORKSPACE/tc
+        cd $GITHUB_WORKSPACE/tc
+        
+        # 64-bit GCC Compiler (AOSP Android 11 Official)
+        wget -q https://googlesource.com -O gcc64.tar.gz
+        tar -xzf gcc64.tar.gz
+        rm gcc64.tar.gz
+        
+        # 32-bit GCC Compiler (AOSP Android 11 Official)
+        wget -q https://googlesource.com -O gcc32.tar.gz
+        tar -xzf gcc32.tar.gz
+        rm gcc32.tar.gz
+        
+        echo "$GITHUB_WORKSPACE/tc/bin" >> $GITHUB_PATH
+
+    - name: Set Environment Variables
+      run: |
+        echo "ARCH=arm64" >> $GITHUB_ENV
+        echo "SUBARCH=arm64" >> $GITHUB_ENV
+        echo "KBUILD_BUILD_USER=Shitanshu" >> $GITHUB_ENV
+        echo "KBUILD_BUILD_HOST=Android" >> $GITHUB_ENV
 
     - name: Auto-Detect Defconfig & Inject Name
       run: |
         cd arch/arm64/configs/
-        # Exynos 9611 के सबसे कॉमन defconfigs को ऑटो-डिटेक्ट करना
         if [ -f exynos9610-m31nsxx_defconfig ]; then
             DEFCONFIG="exynos9610-m31nsxx_defconfig"
         elif [ -f universal9611_q_launching_defconfig ]; then
@@ -35,22 +56,17 @@ jobs:
         echo "Detected Defconfig: $DEFCONFIG"
         cd $GITHUB_WORKSPACE
         
-        # लोकल कर्नल वर्जन नेम में "-Shitanshu" जोड़ना
         echo "CONFIG_LOCALVERSION=\"-Shitanshu\"" >> arch/arm64/configs/$DEFCONFIG
         echo "TARGET_DEFCONFIG=$DEFCONFIG" >> $GITHUB_ENV
-        
-        # कर्नल वर्जन इन्फो में आपका नाम सेट करना
-        echo "KBUILD_BUILD_USER=Shitanshu" >> $GITHUB_ENV
-        echo "KBUILD_BUILD_HOST=Android" >> $GITHUB_ENV
 
-    - name: Build Kernel (GCC Stable Architecture)
+    - name: Build Kernel
       run: |
         make O=out ARCH=arm64 $TARGET_DEFCONFIG
         
         make -j$(nproc --all) O=out \
             ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CROSS_COMPILE=$GITHUB_WORKSPACE/tc/bin/aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/tc/bin/arm-linux-androideabi- \
             KBUILD_BUILD_USER="$KBUILD_BUILD_USER" \
             KBUILD_BUILD_HOST="$KBUILD_BUILD_HOST"
 
@@ -67,7 +83,7 @@ jobs:
             exit 1
         fi
 
-    - name: Pack with AnyKernel3 (Flashable ZIP)
+    - name: Pack with AnyKernel3 (Fully Automatic ZIP)
       run: |
         cd $GITHUB_WORKSPACE
         wget -q https://github.com -O anykernel.zip
@@ -75,7 +91,6 @@ jobs:
         mv AnyKernel3-master AnyKernel
         cd AnyKernel
         
-        # M31 (Exynos 9611) के लिए यूनिवर्सल डिवाइस चेक बायपास और ब्लॉक पाथ सेट करना
         sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
         sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;|block=/dev/block/by-name/boot;|g' anykernel.sh
         
